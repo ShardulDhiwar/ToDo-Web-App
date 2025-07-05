@@ -1,127 +1,34 @@
 
-// Real-time collaborative task storage
-let socket;
-let currentRoomId = null;
+// Room-based task storage with user management
+let currentRoomId = localStorage.getItem('currentRoomId') || null;
 let tasks = {};
 let teamMembers = [];
-let currentUser = 'Anonymous';
-let viewFilter = 'all';
+let currentUser = localStorage.getItem('currentUser') || 'Anonymous';
+let viewFilter = 'all'; // 'all', 'my-tasks', 'assigned-by-me'
 let taskIdCounter = 0;
-let isConnected = false;
 
-// Initialize Socket.IO connection
-function initializeSocket() {
-    // Connect to the server (will work on Replit deployment)
-    socket = io();
-    
-    socket.on('connect', () => {
-        console.log('Connected to server');
-        isConnected = true;
-        updateConnectionStatus();
-    });
-    
-    socket.on('disconnect', () => {
-        console.log('Disconnected from server');
-        isConnected = false;
-        updateConnectionStatus();
-    });
-    
-    // Room events
-    socket.on('room-joined', (data) => {
-        tasks = data.tasks;
-        teamMembers = data.teamMembers;
-        taskIdCounter = data.taskIdCounter;
-        updateUI();
-    });
-    
-    socket.on('room-updated', (data) => {
-        tasks = data.tasks;
-        teamMembers = data.teamMembers;
-        taskIdCounter = data.taskIdCounter;
-        updateUI();
-    });
-    
-    socket.on('user-joined', (data) => {
-        teamMembers = data.teamMembers;
-        updateTeamMembersDisplay();
-        showNotification(`${data.user} joined the room`);
-    });
-    
-    socket.on('user-left', (data) => {
-        teamMembers = data.teamMembers;
-        updateTeamMembersDisplay();
-        showNotification(`${data.user} left the room`);
-    });
-    
-    socket.on('task-added', (data) => {
-        tasks = data.tasks;
-        taskIdCounter = data.taskIdCounter;
-        renderAllTasks();
-        showNotification(`New task added by ${data.user}`);
-    });
-    
-    socket.on('task-updated', (data) => {
-        tasks = data.tasks;
-        renderAllTasks();
-    });
-    
-    socket.on('error', (error) => {
-        alert(`Error: ${error.message}`);
-    });
-}
-
-// Update connection status indicator
-function updateConnectionStatus() {
-    let indicator = document.getElementById('connection-status');
-    if (!indicator) {
-        indicator = document.createElement('div');
-        indicator.id = 'connection-status';
-        indicator.style.cssText = `
-            position: fixed;
-            top: 10px;
-            right: 10px;
-            padding: 8px 12px;
-            border-radius: 20px;
-            font-size: 0.8rem;
-            font-weight: 600;
-            z-index: 1000;
-            transition: all 0.3s ease;
-        `;
-        document.body.appendChild(indicator);
-    }
-    
-    if (isConnected) {
-        indicator.textContent = '🟢 Connected';
-        indicator.style.background = '#d4edda';
-        indicator.style.color = '#155724';
-    } else {
-        indicator.textContent = '🔴 Disconnected';
-        indicator.style.background = '#f8d7da';
-        indicator.style.color = '#721c24';
+// Initialize room data
+function initializeRoom() {
+    if (currentRoomId) {
+        tasks = JSON.parse(localStorage.getItem(`tasks_${currentRoomId}`)) || {
+            today: [],
+            week: [],
+            month: []
+        };
+        teamMembers = JSON.parse(localStorage.getItem(`teamMembers_${currentRoomId}`)) || ['You'];
+        taskIdCounter = parseInt(localStorage.getItem(`taskIdCounter_${currentRoomId}`)) || 0;
     }
 }
 
-// Show notification
-function showNotification(message) {
-    const notification = document.createElement('div');
-    notification.textContent = message;
-    notification.style.cssText = `
-        position: fixed;
-        top: 50px;
-        right: 10px;
-        background: #667eea;
-        color: white;
-        padding: 12px 16px;
-        border-radius: 8px;
-        font-size: 0.9rem;
-        z-index: 1000;
-        animation: slideInRight 0.3s ease;
-    `;
+// Save room data to localStorage
+function saveRoomData() {
+    if (!currentRoomId) return;
     
-    document.body.appendChild(notification);
-    setTimeout(() => {
-        notification.remove();
-    }, 3000);
+    localStorage.setItem(`tasks_${currentRoomId}`, JSON.stringify(tasks));
+    localStorage.setItem(`teamMembers_${currentRoomId}`, JSON.stringify(teamMembers));
+    localStorage.setItem(`taskIdCounter_${currentRoomId}`, taskIdCounter.toString());
+    localStorage.setItem('currentRoomId', currentRoomId);
+    localStorage.setItem('currentUser', currentUser);
 }
 
 // Generate random room ID
@@ -138,29 +45,24 @@ function generateRoomId() {
 
 // Create new room
 function createNewRoom() {
-    if (!isConnected) {
-        alert('Not connected to server. Please wait and try again.');
-        return;
-    }
-    
     const newRoomId = generateRoomId();
     currentRoomId = newRoomId;
     
-    socket.emit('create-room', {
-        roomId: newRoomId,
-        user: currentUser
-    });
+    // Initialize fresh data for new room
+    tasks = {
+        today: [],
+        week: [],
+        month: []
+    };
+    teamMembers = [currentUser === 'Anonymous' ? 'You' : currentUser];
+    taskIdCounter = 0;
     
+    saveRoomData();
     showTaskManager();
 }
 
 // Join existing room
 function joinRoom() {
-    if (!isConnected) {
-        alert('Not connected to server. Please wait and try again.');
-        return;
-    }
-    
     const input = document.getElementById('room-id-input');
     const roomId = input.value.trim();
     
@@ -169,12 +71,31 @@ function joinRoom() {
         return;
     }
     
+    // Check if room exists (has data)
+    const existingTasks = localStorage.getItem(`tasks_${roomId}`);
+    
     currentRoomId = roomId;
     
-    socket.emit('join-room', {
-        roomId: roomId,
-        user: currentUser
-    });
+    if (existingTasks) {
+        // Room exists, load existing data
+        initializeRoom();
+        
+        // Add current user to team if not already present
+        if (currentUser !== 'Anonymous' && !teamMembers.includes(currentUser)) {
+            teamMembers.push(currentUser);
+            saveRoomData();
+        }
+    } else {
+        // New room, initialize with fresh data
+        tasks = {
+            today: [],
+            week: [],
+            month: []
+        };
+        teamMembers = [currentUser === 'Anonymous' ? 'You' : currentUser];
+        taskIdCounter = 0;
+        saveRoomData();
+    }
     
     input.value = '';
     showTaskManager();
@@ -182,14 +103,9 @@ function joinRoom() {
 
 // Leave current room
 function leaveRoom() {
-    if (confirm('Are you sure you want to leave this room?')) {
-        if (socket && currentRoomId) {
-            socket.emit('leave-room', {
-                roomId: currentRoomId,
-                user: currentUser
-            });
-        }
+    if (confirm('Are you sure you want to leave this room? You will lose access to the current tasks.')) {
         currentRoomId = null;
+        localStorage.removeItem('currentRoomId');
         showRoomSelection();
     }
 }
@@ -198,6 +114,13 @@ function leaveRoom() {
 function showRoomSelection() {
     document.getElementById('room-selection').classList.remove('hidden');
     document.getElementById('task-manager').classList.add('hidden');
+    
+    if (currentRoomId) {
+        document.getElementById('current-room-display').classList.remove('hidden');
+        document.getElementById('current-room-id').textContent = currentRoomId;
+    } else {
+        document.getElementById('current-room-display').classList.add('hidden');
+    }
 }
 
 // Show task manager
@@ -218,19 +141,14 @@ function setCurrentUser() {
         return;
     }
     
-    const oldUser = currentUser;
     currentUser = name;
-    
-    if (socket && currentRoomId) {
-        socket.emit('update-user', {
-            roomId: currentRoomId,
-            oldUser: oldUser,
-            newUser: name
-        });
+    if (!teamMembers.includes(name)) {
+        teamMembers.push(name);
     }
     
     input.value = '';
     updateUI();
+    saveRoomData();
 }
 
 // Add team member
@@ -248,15 +166,10 @@ function addTeamMember() {
         return;
     }
     
-    if (socket && currentRoomId) {
-        socket.emit('add-member', {
-            roomId: currentRoomId,
-            memberName: name,
-            user: currentUser
-        });
-    }
-    
+    teamMembers.push(name);
     input.value = '';
+    updateUI();
+    saveRoomData();
 }
 
 // Remove team member
@@ -267,13 +180,9 @@ function removeTeamMember(memberName) {
     }
     
     if (confirm(`Remove ${memberName} from the team?`)) {
-        if (socket && currentRoomId) {
-            socket.emit('remove-member', {
-                roomId: currentRoomId,
-                memberName: memberName,
-                user: currentUser
-            });
-        }
+        teamMembers = teamMembers.filter(m => m !== memberName);
+        updateUI();
+        saveRoomData();
     }
 }
 
@@ -306,6 +215,7 @@ function updateTeamMembersDisplay() {
 function switchUser(memberName) {
     currentUser = memberName;
     updateUI();
+    saveRoomData();
 }
 
 // Update assignee dropdowns
@@ -344,11 +254,6 @@ function filterTasks(sectionTasks) {
 
 // Add task function
 function addTask(section) {
-    if (!isConnected || !currentRoomId) {
-        alert('Not connected to room. Please join a room first.');
-        return;
-    }
-    
     const input = document.getElementById(`${section}-input`);
     const assigneeSelect = document.getElementById(`${section}-assignee`);
     const taskText = input.value.trim();
@@ -360,6 +265,7 @@ function addTask(section) {
     }
 
     const task = {
+        id: ++taskIdCounter,
         text: taskText,
         assignee: assignee,
         assigner: currentUser,
@@ -367,21 +273,18 @@ function addTask(section) {
         createdAt: new Date().toISOString()
     };
 
-    socket.emit('add-task', {
-        roomId: currentRoomId,
-        section: section,
-        task: task,
-        user: currentUser
-    });
-
+    tasks[section].push(task);
     input.value = '';
     assigneeSelect.value = '';
+    renderTasks(section);
+    updateTaskCount(section);
+    saveRoomData();
 }
 
 // Render tasks for a section
 function renderTasks(section) {
     const container = document.getElementById(`${section}-tasks`);
-    const sectionTasks = filterTasks(tasks[section] || []);
+    const sectionTasks = filterTasks(tasks[section]);
 
     if (sectionTasks.length === 0) {
         const emptyMessage = viewFilter === 'all' 
@@ -425,21 +328,18 @@ function escapeHtml(text) {
 
 // Toggle task completion
 function toggleTask(section, taskId) {
-    if (!socket || !currentRoomId) return;
-    
-    socket.emit('toggle-task', {
-        roomId: currentRoomId,
-        section: section,
-        taskId: taskId,
-        user: currentUser
-    });
+    const task = tasks[section].find(t => t.id === taskId);
+    if (task) {
+        task.completed = !task.completed;
+        renderTasks(section);
+        updateTaskCount(section);
+        saveRoomData();
+    }
 }
 
 // Delete task
 function deleteTask(section, taskId) {
-    if (!socket || !currentRoomId) return;
-    
-    const task = (tasks[section] || []).find(t => t.id === taskId);
+    const task = tasks[section].find(t => t.id === taskId);
     if (!task) return;
     
     // Only allow deletion if user is the assigner or assignee
@@ -449,18 +349,16 @@ function deleteTask(section, taskId) {
     }
     
     if (confirm('Are you sure you want to delete this task?')) {
-        socket.emit('delete-task', {
-            roomId: currentRoomId,
-            section: section,
-            taskId: taskId,
-            user: currentUser
-        });
+        tasks[section] = tasks[section].filter(t => t.id !== taskId);
+        renderTasks(section);
+        updateTaskCount(section);
+        saveRoomData();
     }
 }
 
 // Update task count
 function updateTaskCount(section) {
-    const allTasks = tasks[section] || [];
+    const allTasks = tasks[section];
     const filteredTasks = filterTasks(allTasks);
     const completedCount = filteredTasks.filter(t => t.completed).length;
     const countElement = document.getElementById(`${section}-count`);
@@ -493,13 +391,25 @@ function exportTasks() {
     URL.revokeObjectURL(url);
 }
 
+// Clear all completed tasks
+function clearCompleted(section) {
+    if (confirm('Remove all completed tasks?')) {
+        tasks[section] = tasks[section].filter(t => !t.completed);
+        renderTasks(section);
+        updateTaskCount(section);
+        saveRoomData();
+    }
+}
+
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialize Socket.IO connection
-    initializeSocket();
-    
-    // Show room selection by default
-    showRoomSelection();
+    // Check if user is already in a room
+    if (currentRoomId) {
+        initializeRoom();
+        showTaskManager();
+    } else {
+        showRoomSelection();
+    }
 
     // Add Enter key support for room input
     document.getElementById('room-id-input').addEventListener('keypress', function(e) {
@@ -530,4 +440,18 @@ document.addEventListener('DOMContentLoaded', function() {
             addTeamMember();
         }
     });
+
+    // Add export button when in task manager
+    setTimeout(() => {
+        if (!document.getElementById('export-btn') && currentRoomId) {
+            const header = document.querySelector('.header');
+            const exportBtn = document.createElement('button');
+            exportBtn.id = 'export-btn';
+            exportBtn.innerHTML = '📥 Export Room Tasks';
+            exportBtn.className = 'add-btn';
+            exportBtn.style.marginTop = '10px';
+            exportBtn.onclick = exportTasks;
+            header.appendChild(exportBtn);
+        }
+    }, 100);
 });
